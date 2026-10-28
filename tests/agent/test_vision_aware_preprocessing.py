@@ -13,7 +13,8 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import json
+from unittest.mock import AsyncMock, patch
 
 
 from run_agent import AIAgent
@@ -76,6 +77,23 @@ class TestPrepareAnthropicMessages:
         assert "What's in this image?" in content
         # No more image parts.
         assert "image_url" not in content
+
+    def test_fallback_uses_shared_faithful_prompt_and_handoff(self):
+        from agent.vision_preanalysis import IMAGE_PREANALYSIS_PROMPT, build_preanalysis_note
+
+        agent = _make_agent()
+        with patch(
+            "tools.vision_tools.vision_analyze_tool",
+            new_callable=AsyncMock,
+            return_value=json.dumps({"success": True, "analysis": "药名 0.25g"}),
+        ) as mock_vision:
+            note = agent._describe_image_for_anthropic_fallback("/tmp/medicine.jpg", "user")
+
+        assert mock_vision.await_args is not None
+        assert mock_vision.await_args.kwargs["user_prompt"] == IMAGE_PREANALYSIS_PROMPT
+        assert note == build_preanalysis_note(
+            description="药名 0.25g", image_path="/tmp/medicine.jpg", role_label="user",
+        )
 
 
 # ─── _prepare_messages_for_non_vision_model ──────────────────────────────────

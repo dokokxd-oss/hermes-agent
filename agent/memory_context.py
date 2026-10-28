@@ -18,6 +18,7 @@ _INTERNAL_NOTE_RE = re.compile(
     r'\[System note:\s*The following is recalled memory context,\s*NOT new user input\.\s*Treat as (?:informational background data|authoritative reference data[^\]]*)\.\]\s*',
     re.IGNORECASE,
 )
+_OPEN_CONTEXT_RE = re.compile(r'<\s*memory-context\s*>', re.IGNORECASE)
 
 
 def sanitize_context(text: str) -> str:
@@ -25,6 +26,41 @@ def sanitize_context(text: str) -> str:
     for pattern in (_INTERNAL_CONTEXT_RE, _INTERNAL_NOTE_RE, _FENCE_TAG_RE):
         text = pattern.sub('', text)
     return text
+
+
+def strip_verified_memory_context_leaks(text: str) -> str:
+    """Drop only blocks carrying Hermes' internal memory-system-note signature.
+
+    Untrusted OCR can legitimately contain ``<memory-context>`` as visible text,
+    so the broad output scrubber above is too destructive for document handoff.
+    """
+    def _balanced_signed_end(opening: re.Match[str]) -> int | None:
+        note_start = opening.end()
+        while note_start < len(text) and text[note_start].isspace():
+            note_start += 1
+        if _INTERNAL_NOTE_RE.match(text, note_start) is None:
+            return None
+        depth = 1
+        for tag in _FENCE_TAG_RE.finditer(text, opening.end()):
+            if re.match(r'<\s*/', tag.group(0)):
+                depth -= 1
+                if depth == 0:
+                    return tag.end()
+            else:
+                depth += 1
+        return None
+
+    kept: list[str] = []
+    cursor = search_at = 0
+    while opening := _OPEN_CONTEXT_RE.search(text, search_at):
+        block_end = _balanced_signed_end(opening)
+        if block_end is None:
+            search_at = opening.end()
+            continue
+        kept.append(text[cursor:opening.start()])
+        cursor = search_at = block_end
+    kept.append(text[cursor:])
+    return "".join(kept)
 
 
 class StreamingContextScrubber:
